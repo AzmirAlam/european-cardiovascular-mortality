@@ -21,11 +21,11 @@ The repository includes `data/raw/cardiovascular_mortality.csv`, downloaded from
 
 ## Run
 
-```bash
-pip install -r requirements.txt
-python src/analyse_cardiovascular_mortality.py
-jupyter lab
+```r
+install.packages(c("dplyr", "ggplot2", "knitr", "rmarkdown", "tidyr"))
 ```
+
+Open `cardiovascular-mortality-analysis.Rmd` in RStudio and click **Knit**. The analysis reads the included Eurostat CSV and recreates the Tableau export and chart.
 
 ## Example visual
 
