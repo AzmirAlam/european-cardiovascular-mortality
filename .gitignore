@@ -1,6 +1,7 @@
 __pycache__/
 .ipynb_checkpoints/
-data/raw/*.csv
-!data/raw/.gitkeep
-data/processed/*.csv
-!data/processed/.gitkeep
+.Rhistory
+.RData
+.Rproj.user/
+*_files/
+Rplots.pdf

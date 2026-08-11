@@ -1,0 +1,146 @@
+---
+title: "Cardiovascular Mortality Inequalities in Europe"
+author: "Md. Azmir Alam"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: cosmo
+---
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(tidyr)
+
+knitr::opts_chunk$set(echo = TRUE, fig.width = 9, fig.height = 7)
+```
+
+## Research question
+
+How do age-standardised cardiovascular mortality rates differ across European countries, sexes and years?
+
+## Load and validate the data
+
+```{r load-data}
+data_path <- "data/raw/cardiovascular_mortality.csv"
+cvd <- read.csv(data_path, na.strings = c("", "NA"), check.names = FALSE)
+
+required_columns <- c(
+  "Country", "Country_code", "Year", "Sex",
+  "Age_standardised_rate", "Data_flag", "Source"
+)
+
+missing_columns <- setdiff(required_columns, names(cvd))
+if (length(missing_columns) > 0) {
+  stop("Missing columns: ", paste(missing_columns, collapse = ", "))
+}
+
+cvd <- cvd |>
+  mutate(
+    Year = as.integer(Year),
+    Age_standardised_rate = as.numeric(Age_standardised_rate)
+  ) |>
+  filter(!is.na(Country), !is.na(Year), !is.na(Age_standardised_rate)) |>
+  arrange(Country, Year, Sex)
+
+kable(head(cvd), caption = "Eurostat cardiovascular mortality data")
+```
+
+## Data-quality summary
+
+```{r quality-summary}
+data.frame(
+  Measure = c("Rows", "Countries", "First year", "Latest year", "Sex categories"),
+  Value = c(
+    nrow(cvd),
+    n_distinct(cvd$Country),
+    min(cvd$Year),
+    max(cvd$Year),
+    paste(sort(unique(cvd$Sex)), collapse = ", ")
+  )
+) |>
+  kable()
+```
+
+## Male–female mortality gap
+
+```{r sex-gap}
+sex_gap <- cvd |>
+  filter(Sex %in% c("Males", "Females")) |>
+  select(Country, Year, Sex, Age_standardised_rate) |>
+  pivot_wider(names_from = Sex, values_from = Age_standardised_rate) |>
+  mutate(Male_female_gap = Males - Females)
+
+cvd_tableau <- cvd |>
+  left_join(sex_gap |> select(Country, Year, Male_female_gap), by = c("Country", "Year"))
+
+latest_gaps <- sex_gap |>
+  group_by(Country) |>
+  slice_max(Year, n = 1, with_ties = FALSE) |>
+  ungroup() |>
+  arrange(desc(Male_female_gap)) |>
+  slice_head(n = 15)
+
+kable(latest_gaps, digits = 1, caption = "Largest latest male–female mortality gaps")
+```
+
+## Countries with the highest latest rates
+
+```{r latest-rate-plot}
+latest_total <- cvd |>
+  filter(Sex == "Total") |>
+  group_by(Country) |>
+  slice_max(Year, n = 1, with_ties = FALSE) |>
+  ungroup()
+
+highest_rates <- latest_total |>
+  slice_max(Age_standardised_rate, n = 15) |>
+  arrange(Age_standardised_rate)
+
+mortality_plot <- ggplot(highest_rates, aes(x = Age_standardised_rate, y = reorder(Country, Age_standardised_rate))) +
+  geom_col(fill = "#4C78A8") +
+  labs(
+    title = "Highest latest cardiovascular mortality rates",
+    x = "Age-standardised rate per 100,000",
+    y = "Country"
+  ) +
+  theme_minimal(base_size = 12)
+
+mortality_plot
+
+dir.create("visuals", showWarnings = FALSE, recursive = TRUE)
+ggsave("visuals/cardiovascular_mortality_by_sex.png", mortality_plot, width = 9, height = 7, dpi = 200)
+```
+
+## Mortality trends
+
+```{r trends}
+selected_countries <- highest_rates |>
+  slice_max(Age_standardised_rate, n = 6) |>
+  pull(Country)
+
+cvd |>
+  filter(Sex == "Total", Country %in% selected_countries) |>
+  ggplot(aes(x = Year, y = Age_standardised_rate, colour = Country)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  labs(
+    title = "Cardiovascular mortality trends in selected high-rate countries",
+    x = "Year",
+    y = "Age-standardised rate per 100,000"
+  ) +
+  theme_minimal(base_size = 12)
+```
+
+## Tableau export
+
+```{r tableau-export}
+dir.create("data/processed", showWarnings = FALSE, recursive = TRUE)
+write.csv(cvd_tableau, "data/processed/tableau_cardiovascular_mortality.csv", row.names = FALSE, na = "")
+```
+
+## Interpretation and limitations
+
+Age-standardisation improves comparisons across differently aged populations. However, country reporting practices, coding and mortality-registration completeness still vary. The analysis describes population patterns and should not be interpreted as an individual risk model.

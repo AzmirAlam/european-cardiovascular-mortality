@@ -8,9 +8,9 @@ This project uses age- and sex-disaggregated population mortality data to study 
 
 ## Data
 
-Use the [WHO European Mortality Database](https://gateway.euro.who.int/en/datasets/european-mortality-database/) to download country-year cardiovascular mortality data. Save it as `data/raw/cardiovascular_mortality.csv` with:
+The repository includes `data/raw/cardiovascular_mortality.csv`, downloaded from [Eurostat dataset `hlth_cd_asdr2`](https://ec.europa.eu/eurostat/databrowser/view/hlth_cd_asdr2/default/table?lang=en). It contains annual standardised death rates for diseases of the circulatory system from 2015 onward:
 
-`Country, Year, Sex, Deaths, Population, Age_standardised_rate`
+`Country, Country_code, Year, Sex, Age_standardised_rate, Data_flag, Source`
 
 ## Analysis
 
@@ -21,11 +21,15 @@ Use the [WHO European Mortality Database](https://gateway.euro.who.int/en/datase
 
 ## Run
 
-```bash
-pip install -r requirements.txt
-python src/analyse_cardiovascular_mortality.py
-jupyter lab
+```r
+install.packages(c("dplyr", "ggplot2", "knitr", "rmarkdown", "tidyr"))
 ```
+
+Open `cardiovascular-mortality-analysis.Rmd` in RStudio and click **Knit**. The analysis reads the included Eurostat CSV and recreates the Tableau export and chart.
+
+## Example visual
+
+![Latest cardiovascular mortality rates](visuals/cardiovascular_mortality_by_sex.png)
 
 ## Tableau dashboard
 
@@ -33,4 +37,4 @@ Include a country map, a time-series trend, a sex comparison, and a ranking show
 
 ## Methods and limitations
 
-Country reporting practices and the completeness of mortality registration vary. Prefer age-standardised rates for comparisons and interpret differences with caution.
+Country reporting practices and mortality-registration completeness vary. Rates are per 100,000 inhabitants and standardised to improve comparisons; remaining differences should still be interpreted cautiously.
