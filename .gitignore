@@ -3,5 +3,7 @@ __pycache__/
 .Rhistory
 .RData
 .Rproj.user/
+*.utf8.md
+*.knit.md
 *_files/
 Rplots.pdf

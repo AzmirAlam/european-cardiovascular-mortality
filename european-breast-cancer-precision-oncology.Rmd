@@ -1,0 +1,645 @@
+---
+title: "European Breast Cancer Precision-Oncology Access"
+subtitle: "Burden, biomarker-guided trials and geographic research-access gaps"
+author: "Azmir Alam"
+date: "`r format(Sys.Date(), '%d %B %Y')`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    number_sections: true
+    code_folding: show
+    df_print: paged
+    theme: cosmo
+    highlight: tango
+---
+
+<style>
+body { background: #ffffff; color: #1f2937; max-width: 1180px; margin: auto; }
+h1, h2, h3 { color: #7a1f5c; }
+.well, pre, code { background-color: #f8fafc; }
+table { background: #ffffff; }
+.question { border-left: 5px solid #b83280; padding: 0.8rem 1rem; background: #fff5fa; }
+.caution { border-left: 5px solid #d97706; padding: 0.8rem 1rem; background: #fffbeb; }
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE, warning = FALSE, message = FALSE,
+  fig.width = 10, fig.height = 6, fig.align = "center",
+  out.width = "95%"
+)
+
+required_packages <- c(
+  "dplyr", "tidyr", "purrr", "stringr", "ggplot2", "knitr", "maps", "scales"
+)
+missing_packages <- setdiff(required_packages, rownames(installed.packages()))
+if (length(missing_packages) > 0) {
+  stop("Install missing packages: ", paste(missing_packages, collapse = ", "))
+}
+
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tidyr)
+  library(purrr)
+  library(stringr)
+  library(ggplot2)
+  library(knitr)
+  library(maps)
+  library(scales)
+})
+
+dir.create("visuals", showWarnings = FALSE)
+dir.create("data/processed", recursive = TRUE, showWarnings = FALSE)
+options(scipen = 999)
+
+theme_set(
+  theme_minimal(base_size = 12) +
+    theme(
+      plot.title = element_text(face = "bold", color = "#6b1d52"),
+      plot.subtitle = element_text(color = "#4b5563"),
+      panel.grid.minor = element_blank(),
+      legend.position = "bottom"
+    )
+)
+```
+
+# Executive summary
+
+<div class="question">
+**Primary research question:** Across countries covered by the European Cancer Information System (ECIS), is the geographic distribution of sites listed for active biomarker-guided breast-cancer trials proportionate to the estimated breast-cancer burden, and which biomarkers and treatment classes are least represented?
+</div>
+
+This project links three open-data layers:
+
+1. 2024 female breast-cancer incidence and mortality estimates from ECIS;
+2. active interventional breast-cancer studies and their listed locations from ClinicalTrials.gov; and
+3. a transparent text-classification dictionary for biomarkers and precision-treatment classes.
+
+The analysis measures **research opportunity and portfolio composition**. It does not measure whether a patient actually received testing or treatment, whether a medicine is reimbursed, or whether a treatment improved survival.
+
+# 1. Why this research gap matters
+
+European precision-oncology policy increasingly emphasises next-generation sequencing, molecular tumour boards, interoperable data and trial matching. The conference evidence motivating this project describes uneven molecular-tumour-board access, testing and interpretation barriers, therapy and sequencing-coverage gaps, and the need for timely multidisciplinary review. A second conference contribution identifies health-economic evidence, workforce education, digital infrastructure, policy coordination and equitable access as priorities for pharmacogenomics.
+
+That policy problem is not answered by another descriptive cancer-mortality ranking. A more specific open-data gap is the absence of an easily reproducible country-level analysis connecting:
+
+- breast-cancer need (incidence and mortality);
+- the geography of active biomarker-guided research;
+- the biomarker and therapy portfolio being studied; and
+- countries where research-site share is lower than burden share.
+
+## Objectives
+
+1. Describe the 2024 breast-cancer burden across ECIS countries.
+2. Identify active interventional breast-cancer studies with at least one listed ECIS-country site.
+3. Classify trials by biomarker and precision-treatment class using an auditable dictionary.
+4. Standardise trial and site availability by estimated incident cases.
+5. quantify geographic concentration and burden–access mismatch.
+6. Test whether conclusions change under a narrower recruiting-status definition.
+7. Produce Tableau-ready country and trial files for continued exploration.
+
+# 2. Study design and estimand
+
+This is a cross-sectional, ecological, descriptive study using public aggregate and registry metadata. The unit of analysis is the **country** for the geographic analysis and the **NCT study** for the research-portfolio analysis.
+
+The main estimand is:
+
+\[
+\text{Listed precision-trial sites per 1,000 incident cases} =
+\frac{\text{distinct listed sites in biomarker-guided therapeutic trials}}
+{\text{estimated 2024 incident breast-cancer cases}} \times 1,000
+\]
+
+A complementary mismatch measure compares each country's share of precision-trial sites with its share of incident cases:
+
+\[
+\text{Access gap (percentage points)} = \text{site share} - \text{case share}
+\]
+
+Negative values identify countries with fewer listed precision-trial sites than expected if sites were distributed in proportion to estimated cases. This is a prioritisation signal, not a causal effect or a complete measure of care access.
+
+# 3. Data provenance
+
+```{r load-data}
+trials <- read.csv(
+  "data/raw/clinicaltrials_europe_trials.csv",
+  na.strings = c("", "NA"), check.names = FALSE
+)
+sites <- read.csv(
+  "data/raw/clinicaltrials_europe_sites.csv",
+  na.strings = c("", "NA"), check.names = FALSE
+)
+ecis <- read.csv(
+  "data/raw/ecis_breast_cancer_2024.csv",
+  na.strings = c("", "NA"), check.names = FALSE
+)
+dictionary <- read.csv(
+  "data/raw/precision_oncology_dictionary.csv",
+  na.strings = c("", "NA"), check.names = FALSE
+)
+
+data_inventory <- tibble(
+  dataset = c("ECIS burden", "ClinicalTrials.gov studies", "Listed study sites", "Classification dictionary"),
+  rows = c(nrow(ecis), nrow(trials), nrow(sites), nrow(dictionary)),
+  snapshot = c(
+    paste(unique(ecis$snapshot_date), collapse = ", "),
+    paste(unique(trials$snapshot_date), collapse = ", "),
+    paste(unique(sites$snapshot_date), collapse = ", "),
+    "Version controlled"
+  )
+)
+kable(data_inventory, caption = "Data used in this reproducible snapshot")
+```
+
+**Interpretation.** The repository includes frozen snapshots so that the report remains reproducible. Run `Rscript scripts/download_open_data.R` to refresh the two live sources; results will change as ClinicalTrials.gov records and ECIS estimates change.
+
+## Data-quality checks
+
+```{r data-quality}
+required_trial_columns <- c(
+  "nct_id", "brief_title", "overall_status", "study_type", "phase",
+  "lead_sponsor", "sponsor_class", "conditions", "intervention_names",
+  "intervention_types", "brief_summary", "eligibility_criteria"
+)
+required_site_columns <- c("nct_id", "facility", "city", "country_name", "country_code")
+required_ecis_columns <- c(
+  "measure_code", "country_code", "country_name", "is_group", "n_cases", "asr_e_new"
+)
+
+stopifnot(all(required_trial_columns %in% names(trials)))
+stopifnot(all(required_site_columns %in% names(sites)))
+stopifnot(all(required_ecis_columns %in% names(ecis)))
+stopifnot(!anyDuplicated(trials$nct_id))
+stopifnot(all(sites$nct_id %in% trials$nct_id))
+
+quality <- tibble(
+  check = c(
+    "Unique NCT identifiers", "Sites linked to a downloaded trial",
+    "ECIS country-measure duplicates", "Sites missing facility name",
+    "Sites missing coordinates"
+  ),
+  result = c(
+    n_distinct(trials$nct_id),
+    sum(sites$nct_id %in% trials$nct_id),
+    sum(duplicated(ecis[c("country_code", "measure_code")])),
+    sum(is.na(sites$facility)),
+    sum(is.na(sites$latitude) | is.na(sites$longitude))
+  )
+)
+kable(quality, caption = "Core validation checks")
+```
+
+**Interpretation.** Missing facility names or coordinates do not remove a country-level location if its country is known. Location records do not reliably indicate whether each individual site is presently open; this report therefore says **listed site**, never “currently recruiting site.”
+
+# 4. Stage I — European breast-cancer burden
+
+```{r prepare-burden}
+burden <- ecis |>
+  filter(as.character(is_group) == "0") |>
+  mutate(
+    n_cases = as.numeric(n_cases),
+    asr_e_new = as.numeric(asr_e_new),
+    crude_rate = as.numeric(crude_rate),
+    cumulative_risk = as.numeric(cumulative_risk)
+  ) |>
+  select(
+    country_code, country_name, measure_code, estimation_method,
+    n_cases, asr_e_new, crude_rate, cumulative_risk
+  ) |>
+  pivot_wider(
+    names_from = measure_code,
+    values_from = c(n_cases, asr_e_new, crude_rate, cumulative_risk, estimation_method),
+    names_glue = "{measure_code}_{.value}"
+  ) |>
+  mutate(
+    mortality_incidence_ratio = MO_asr_e_new / IN_asr_e_new
+  )
+
+burden_plot <- ggplot(burden, aes(IN_asr_e_new, MO_asr_e_new)) +
+  geom_point(aes(size = IN_n_cases), color = "#b83280", alpha = 0.75) +
+  geom_text(
+    data = burden |> slice_max(MO_asr_e_new, n = 8),
+    aes(label = country_code), nudge_y = 0.35, size = 3.2
+  ) +
+  scale_size_continuous(labels = comma, name = "Incident cases") +
+  labs(
+    title = "Breast-cancer incidence and mortality vary substantially across Europe",
+    subtitle = "Female age-standardised rates (European 2013 standard), ECIS estimates for 2024",
+    x = "Incidence per 100,000", y = "Mortality per 100,000",
+    caption = "Source: European Cancer Information System (ECIS). Country codes label the eight highest mortality rates."
+  )
+
+ggsave("visuals/01_breast_cancer_burden.png", burden_plot, width = 10, height = 6, dpi = 300, bg = "white")
+burden_plot
+```
+
+```{r burden-table}
+burden |>
+  arrange(desc(MO_asr_e_new)) |>
+  transmute(
+    Country = country_name,
+    `Incident cases` = IN_n_cases,
+    `Incidence ASR` = IN_asr_e_new,
+    `Deaths` = MO_n_cases,
+    `Mortality ASR` = MO_asr_e_new,
+    `Mortality/incidence rate ratio` = round(mortality_incidence_ratio, 3)
+  ) |>
+  head(12) |>
+  kable(caption = "Countries with the highest estimated breast-cancer mortality rates")
+```
+
+**Interpretation.** Incidence and mortality rates capture different dimensions of need. The mortality-to-incidence rate ratio is only an ecological descriptive indicator; it is not equivalent to survival because the numerator and denominator are cross-sectional estimates and may reflect screening, diagnostic practices, age structure, registry inputs and estimation methods.
+
+# 5. Stage II — Identify biomarker-guided therapeutic trials
+
+The classification is transparent and reproducible. A trial is called biomarker-guided when at least one dictionary pattern appears in its title, conditions, summary, eligibility criteria or intervention names. The primary analytic set further requires a drug, biological or genetic intervention. Multiple biomarker and treatment labels are allowed for one study.
+
+```{r classify-trials}
+trials <- trials |>
+  mutate(
+    broad_text = str_to_lower(paste(
+      brief_title, conditions, brief_summary, eligibility_criteria, intervention_names,
+      sep = " | "
+    )),
+    strict_text = str_to_lower(paste(
+      brief_title, conditions, eligibility_criteria, intervention_names,
+      sep = " | "
+    )),
+    therapeutic_intervention = str_detect(
+      coalesce(intervention_types, ""), "DRUG|BIOLOGICAL|GENETIC"
+    )
+  )
+
+classify_trials <- function(data, dictionary_rows, text_column = "broad_text") {
+  map_dfr(seq_len(nrow(dictionary_rows)), function(i) {
+    data |>
+      transmute(
+        nct_id,
+        label = dictionary_rows$label[i],
+        hit = str_detect(
+          .data[[text_column]],
+          regex(dictionary_rows$pattern[i], ignore_case = TRUE)
+        )
+      ) |>
+      filter(hit) |>
+      select(-hit)
+  }) |>
+    distinct()
+}
+
+biomarker_hits <- classify_trials(
+  trials, filter(dictionary, domain == "biomarker"), "broad_text"
+)
+strict_biomarker_hits <- classify_trials(
+  trials, filter(dictionary, domain == "biomarker"), "strict_text"
+)
+therapy_hits <- classify_trials(
+  trials, filter(dictionary, domain == "therapy"), "broad_text"
+)
+
+trials <- trials |>
+  mutate(
+    biomarker_guided = nct_id %in% biomarker_hits$nct_id,
+    strict_biomarker_guided = nct_id %in% strict_biomarker_hits$nct_id,
+    precision_therapeutic = biomarker_guided & therapeutic_intervention,
+    narrow_recruiting_status = overall_status %in% c("RECRUITING", "NOT_YET_RECRUITING")
+  )
+
+classification_summary <- trials |>
+  summarise(
+    `All active interventional studies with a listed ECIS-country site` = n(),
+    `Biomarker-guided studies` = sum(biomarker_guided),
+    `Biomarker-guided therapeutic studies (primary set)` = sum(precision_therapeutic),
+    `Primary-set studies recruiting or not yet recruiting` = sum(precision_therapeutic & narrow_recruiting_status)
+  ) |>
+  pivot_longer(everything(), names_to = "Definition", values_to = "Studies")
+
+kable(classification_summary, caption = "Progressive construction of the analytic trial set")
+```
+
+**Interpretation.** Dictionary-based classification makes a large registry auditable, but it is not equivalent to expert review of every protocol. The strict and status-restricted sensitivity analyses below show whether the main country pattern depends strongly on classification wording or study status.
+
+# 6. Stage III — Biomarker and treatment portfolio
+
+```{r biomarker-portfolio}
+biomarker_counts <- biomarker_hits |>
+  semi_join(filter(trials, precision_therapeutic), by = "nct_id") |>
+  count(label, name = "trials", sort = TRUE)
+
+biomarker_plot <- ggplot(biomarker_counts, aes(trials, reorder(label, trials))) +
+  geom_col(fill = "#b83280") +
+  geom_text(aes(label = trials), hjust = -0.15, size = 3.5) +
+  expand_limits(x = max(biomarker_counts$trials) * 1.12) +
+  labs(
+    title = "HER2 and hormone receptors dominate precision-trial biomarkers",
+    subtitle = "One study may contribute to more than one biomarker group",
+    x = "Distinct biomarker-guided therapeutic studies", y = NULL,
+    caption = "Source: ClinicalTrials.gov snapshot; automated dictionary classification."
+  )
+
+ggsave("visuals/04_biomarker_portfolio.png", biomarker_plot, width = 9, height = 5.5, dpi = 300, bg = "white")
+biomarker_plot
+```
+
+```{r therapy-portfolio}
+therapy_counts <- therapy_hits |>
+  semi_join(filter(trials, precision_therapeutic), by = "nct_id") |>
+  count(label, name = "trials", sort = TRUE)
+
+therapy_plot <- ggplot(therapy_counts, aes(trials, reorder(label, trials))) +
+  geom_col(fill = "#315b8a") +
+  geom_text(aes(label = trials), hjust = -0.15, size = 3.5) +
+  expand_limits(x = max(therapy_counts$trials) * 1.12) +
+  labs(
+    title = "The treatment pipeline spans endocrine, targeted and immune strategies",
+    subtitle = "Counts are non-exclusive because combination trials can contain several treatment classes",
+    x = "Distinct biomarker-guided therapeutic studies", y = NULL,
+    caption = "Source: ClinicalTrials.gov snapshot; automated dictionary classification."
+  )
+
+ggsave("visuals/05_therapy_portfolio.png", therapy_plot, width = 9, height = 5.5, dpi = 300, bg = "white")
+therapy_plot
+```
+
+**Interpretation.** Portfolio counts reveal what is being studied, not what is routinely available. Low counts may reflect mature standard-of-care treatments, alternative registry terminology or a true research gap. The categories are non-exclusive and should be read as a portfolio map rather than a league table of treatment value.
+
+# 7. Stage IV — Country-level burden and listed research sites
+
+```{r country-metrics}
+precision_trials <- trials |> filter(precision_therapeutic)
+
+country_sites <- sites |>
+  semi_join(precision_trials, by = "nct_id") |>
+  mutate(
+    site_key = paste(
+      nct_id, coalesce(facility, "facility-not-reported"),
+      coalesce(city, "city-not-reported"), country_code, sep = "::"
+    )
+  ) |>
+  group_by(country_code, country_name) |>
+  summarise(
+    precision_trials = n_distinct(nct_id),
+    listed_precision_sites = n_distinct(site_key),
+    .groups = "drop"
+  )
+
+all_country_trials <- sites |>
+  group_by(country_code, country_name) |>
+  summarise(all_active_trials = n_distinct(nct_id), .groups = "drop")
+
+country_access <- burden |>
+  left_join(country_sites, by = c("country_code", "country_name")) |>
+  left_join(all_country_trials, by = c("country_code", "country_name")) |>
+  mutate(
+    across(c(precision_trials, listed_precision_sites, all_active_trials), ~ replace_na(.x, 0)),
+    precision_trials_per_1000_cases = 1000 * precision_trials / IN_n_cases,
+    precision_sites_per_1000_cases = 1000 * listed_precision_sites / IN_n_cases,
+    case_share = IN_n_cases / sum(IN_n_cases),
+    site_share = listed_precision_sites / sum(listed_precision_sites),
+    access_gap_pp = 100 * (site_share - case_share)
+  )
+
+country_access |>
+  arrange(desc(precision_sites_per_1000_cases)) |>
+  transmute(
+    Country = country_name,
+    `Incident cases` = IN_n_cases,
+    `Precision trials` = precision_trials,
+    `Listed sites` = listed_precision_sites,
+    `Sites per 1,000 cases` = round(precision_sites_per_1000_cases, 2),
+    `Access gap (pp)` = round(access_gap_pp, 2)
+  ) |>
+  head(15) |>
+  kable(caption = "Highest listed precision-trial site density relative to estimated burden")
+```
+
+**Interpretation.** Country size strongly affects raw counts, so standardised site and trial densities are more informative for geographic comparison. Very small countries can have unstable ratios: one multinational site may produce a high density despite limited overall infrastructure.
+
+## Map of listed precision-trial site density
+
+```{r access-map}
+map_crosswalk <- tibble(
+  country_name = country_access$country_name,
+  map_region = recode(
+    country_access$country_name,
+    "United Kingdom" = "UK",
+    "Czechia" = "Czech Republic",
+    "Republic of North Macedonia" = "North Macedonia",
+    .default = country_access$country_name
+  )
+)
+
+world <- map_data("world")
+map_values <- country_access |>
+  left_join(map_crosswalk, by = "country_name") |>
+  select(map_region, precision_sites_per_1000_cases)
+
+access_map <- world |>
+  left_join(map_values, by = c("region" = "map_region")) |>
+  filter(long > -25, long < 45, lat > 33, lat < 72) |>
+  ggplot(aes(long, lat, group = group, fill = precision_sites_per_1000_cases)) +
+  geom_polygon(color = "white", linewidth = 0.2) +
+  coord_quickmap() +
+  scale_fill_gradient(
+    low = "#fce7f3", high = "#831843", na.value = "#e5e7eb",
+    name = "Listed sites\nper 1,000 cases"
+  ) +
+  labs(
+    title = "Listed precision-trial opportunity is geographically uneven",
+    subtitle = "Biomarker-guided therapeutic breast-cancer trial sites relative to estimated 2024 incident cases",
+    caption = "Grey indicates countries outside the ECIS analytic set or without a matched estimate. Sites are listed locations, not confirmed open recruitment."
+  ) +
+  theme_void(base_size = 12) +
+  theme(
+    plot.title = element_text(face = "bold", color = "#6b1d52"),
+    legend.position = "right"
+  )
+
+ggsave("visuals/02_precision_trial_sites_map.png", access_map, width = 10, height = 7, dpi = 300, bg = "white")
+access_map
+```
+
+**Interpretation.** The map is a research-access proxy. It cannot show cross-border participation, referral networks, travel time, national testing pathways, reimbursement or whether an individual site is accepting participants.
+
+# 8. Stage V — Burden–access mismatch
+
+```{r burden-access-gap}
+gap_data <- country_access |>
+  arrange(access_gap_pp) |>
+  slice_head(n = 12)
+
+gap_plot <- ggplot(gap_data, aes(access_gap_pp, reorder(country_name, access_gap_pp))) +
+  geom_vline(xintercept = 0, color = "#4b5563", linewidth = 0.5) +
+  geom_col(aes(fill = access_gap_pp < 0), show.legend = FALSE) +
+  scale_fill_manual(values = c("FALSE" = "#2563eb", "TRUE" = "#c2416c")) +
+  labs(
+    title = "Countries with the largest negative burden–access gaps",
+    subtitle = "Precision-site share minus estimated incident-case share; percentage points",
+    x = "Access gap (percentage points)", y = NULL,
+    caption = "More negative values indicate a smaller share of listed sites than of estimated cases."
+  )
+
+ggsave("visuals/03_burden_access_gap.png", gap_plot, width = 9, height = 6, dpi = 300, bg = "white")
+gap_plot
+```
+
+```{r concentration-statistics}
+gini <- function(x) {
+  x <- sort(x[is.finite(x) & x >= 0])
+  if (length(x) == 0 || sum(x) == 0) return(NA_real_)
+  n <- length(x)
+  (2 * sum(seq_len(n) * x) / (n * sum(x))) - (n + 1) / n
+}
+
+association <- suppressWarnings(cor.test(
+  country_access$IN_n_cases,
+  country_access$listed_precision_sites,
+  method = "spearman", exact = FALSE
+))
+
+metrics <- tibble(
+  Metric = c(
+    "Countries with no listed precision-therapeutic site",
+    "Spearman correlation: incident cases vs listed sites",
+    "Gini concentration: estimated incident cases",
+    "Gini concentration: listed precision sites"
+  ),
+  Value = c(
+    sum(country_access$listed_precision_sites == 0),
+    round(unname(association$estimate), 3),
+    round(gini(country_access$IN_n_cases), 3),
+    round(gini(country_access$listed_precision_sites), 3)
+  )
+)
+kable(metrics, caption = "Geographic alignment and concentration diagnostics")
+```
+
+**Interpretation.** A positive correlation is expected because larger countries have more cases and more research centres. The gap and Gini statistics ask the harder question: whether research locations are more concentrated than disease burden. They remain descriptive and should guide deeper country investigation, not rank health-system quality.
+
+# 9. Stage VI — Sensitivity analyses
+
+Two decisions could change the result: inclusion of active-but-not-recruiting studies and use of the broad text corpus. We recompute country coverage with (a) only recruiting/not-yet-recruiting studies and (b) the stricter biomarker classification that excludes the free-text summary.
+
+```{r sensitivity}
+narrow_nct <- trials |>
+  filter(precision_therapeutic, narrow_recruiting_status) |>
+  pull(nct_id)
+
+strict_nct <- trials |>
+  filter(
+    strict_biomarker_guided,
+    therapeutic_intervention
+  ) |>
+  pull(nct_id)
+
+sensitivity_country <- function(nct_ids, metric_name) {
+  sites |>
+    filter(nct_id %in% nct_ids) |>
+    group_by(country_code) |>
+    summarise(value = n_distinct(nct_id), .groups = "drop") |>
+    right_join(select(burden, country_code), by = "country_code") |>
+    mutate(value = replace_na(value, 0), definition = metric_name)
+}
+
+sensitivity_results <- bind_rows(
+  sensitivity_country(precision_trials$nct_id, "Primary broad definition"),
+  sensitivity_country(narrow_nct, "Recruiting/not-yet-recruiting only"),
+  sensitivity_country(strict_nct, "Strict text definition")
+) |>
+  group_by(definition) |>
+  summarise(
+    studies = n_distinct(c(
+      if (definition[1] == "Primary broad definition") precision_trials$nct_id
+      else if (definition[1] == "Recruiting/not-yet-recruiting only") narrow_nct
+      else strict_nct
+    )),
+    countries_with_at_least_one_trial = sum(value > 0),
+    countries_with_zero_trials = sum(value == 0),
+    .groups = "drop"
+  )
+
+kable(sensitivity_results, caption = "Sensitivity of country coverage to analytic definitions")
+```
+
+**Interpretation.** If country coverage changes sharply, the geographic conclusion is sensitive to registry status or text-classification choices. This uncertainty should be carried forward rather than hidden behind a single precise ranking.
+
+# 10. Reproducible outputs
+
+```{r export-data}
+trial_catalogue <- precision_trials |>
+  select(
+    nct_id, brief_title, overall_status, phase, lead_sponsor, sponsor_class,
+    intervention_names, intervention_types, start_date, completion_date,
+    last_update_post_date, snapshot_date
+  ) |>
+  left_join(
+    biomarker_hits |>
+      group_by(nct_id) |>
+      summarise(biomarkers = paste(sort(unique(label)), collapse = " | "), .groups = "drop"),
+    by = "nct_id"
+  ) |>
+  left_join(
+    therapy_hits |>
+      group_by(nct_id) |>
+      summarise(therapy_classes = paste(sort(unique(label)), collapse = " | "), .groups = "drop"),
+    by = "nct_id"
+  )
+
+write.csv(country_access, "data/processed/tableau_country_access.csv", row.names = FALSE, na = "")
+write.csv(trial_catalogue, "data/processed/precision_trial_catalogue.csv", row.names = FALSE, na = "")
+write.csv(biomarker_counts, "data/processed/biomarker_trial_counts.csv", row.names = FALSE, na = "")
+write.csv(therapy_counts, "data/processed/therapy_trial_counts.csv", row.names = FALSE, na = "")
+write.csv(
+  sites |> semi_join(precision_trials, by = "nct_id"),
+  "data/processed/listed_precision_trial_sites.csv", row.names = FALSE, na = ""
+)
+
+outputs <- tibble(
+  file = c(
+    "tableau_country_access.csv", "precision_trial_catalogue.csv",
+    "biomarker_trial_counts.csv", "therapy_trial_counts.csv",
+    "listed_precision_trial_sites.csv"
+  ),
+  purpose = c(
+    "Country burden and access dashboard", "Auditable trial-level catalogue",
+    "Biomarker portfolio chart", "Therapy portfolio chart", "Site map or point layer"
+  )
+)
+kable(outputs, caption = "Generated analysis files in data/processed/")
+```
+
+# 11. Conclusions and next research stages
+
+This analysis identifies countries where breast-cancer research opportunity appears low relative to estimated disease burden and shows which biomarker/treatment areas dominate active interventional research. It creates a reproducible screening tool for more detailed health-services research.
+
+The next stages require additional data that should not be inferred from trial registries:
+
+1. **Testing readiness:** national availability, turnaround time and reimbursement for HER2, germline/somatic BRCA, PIK3CA, ESR1 and comprehensive genomic profiling.
+2. **Treatment access:** EMA authorisation linked to country reimbursement decisions, time to access and clinical guideline uptake.
+3. **Molecular tumour boards:** coverage, referral criteria, actionability rates and trial-matching outcomes.
+4. **Equity:** travel time, rurality, socioeconomic deprivation, age and minority representation.
+5. **Patient outcomes:** protected patient-level or registry-linked designs evaluating treatment receipt and survival with appropriate confounding control.
+
+<div class="caution">
+**Do not interpret this report as evidence that trial-rich countries deliver better care or that a listed therapy is clinically appropriate.** Trial metadata, estimated cancer burden and country-level indicators cannot establish individual eligibility, access, treatment effectiveness or causal effects.
+</div>
+
+# 12. Limitations
+
+- ECIS values are modelled country estimates and methods vary by country.
+- ClinicalTrials.gov is not the only European trial registry, and record completeness varies.
+- A listed location may not currently recruit; site status is not consistently available in the downloaded location metadata.
+- Facility deduplication is based on study, facility, city and country strings.
+- Automated pattern matching can create false positives and false negatives.
+- Site counts do not measure enrolment capacity, travel time, referral pathways or cross-border access.
+- Small-country rates can be unstable.
+- The cross-sectional design cannot assess trends in access or patient outcomes.
+
+# 13. Reproducibility
+
+```{r session-info}
+sessionInfo()
+```
+
+The frozen source files record their snapshot dates and source URLs. For a fully documented refresh, run the downloader first and then knit this report from the repository root.
