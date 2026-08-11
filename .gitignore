@@ -5,3 +5,5 @@ __pycache__/
 .Rproj.user/
 *.utf8.md
 *.knit.md
+*_files/
+Rplots.pdf
